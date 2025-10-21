@@ -1,0 +1,9 @@
+.venv/
+.resoureces/
+.idea/
+.logs/
+.__pycache__/
+.data/
+.test_projects/
+.env
+.temp/
