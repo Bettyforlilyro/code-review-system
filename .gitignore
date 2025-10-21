@@ -1,9 +1,9 @@
 .venv/
-.resoureces/
+resoureces/
 .idea/
-.logs/
-.__pycache__/
-.data/
-.test_projects/
+logs/
+__pycache__/
+data/
+test_projects/
 .env
-.temp/
+temp/
