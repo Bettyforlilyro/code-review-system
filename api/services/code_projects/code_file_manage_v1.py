@@ -1,14 +1,12 @@
-import os.path
-
 from flask import request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from api.common.utils.http_response import success_response, error_response
+from api.models.model_code_review_task import CodeFile, CodeFileVersion, ProjectVersionSnapshot, \
+    CodeFileVersionSnapshotAssociation, VersionTaskAssociation
 from api.models.model_project import Project, ProjectMember, db
 from api.models.model_user import User
 from api.services import bp as service_bp
-from api.models.model_code_review_task import CodeFile, CodeFileVersion, ReviewTask, ReviewResult, \
-    ProjectVersionSnapshot, CodeFileVersionSnapshotAssociation, VersionTaskAssociation
 
 
 @service_bp.route('/projects/<project_id>/files/sync', methods=['POST'])
@@ -102,6 +100,34 @@ def get_project_file_by_version(project_id, version_id):
     )
 
 
+def check_file_deletable(file_id):
+    """
+    检查文件是否可以删除
+    """
+    # 使用JOIN查询检查是否存在引用
+    task_referenced = db.session.query(VersionTaskAssociation.review_task_id).join(
+        CodeFileVersion,
+        CodeFileVersion.id == VersionTaskAssociation.version_id
+    ).filter(
+        CodeFileVersion.code_file_id == file_id
+    ).first()
+
+    if task_referenced:
+        return False, "文件有任务引用，请先取消任务！"
+
+    snapshot_referenced = db.session.query(CodeFileVersionSnapshotAssociation.project_version_snapshot_id).join(
+        CodeFileVersion,
+        CodeFileVersion.id == CodeFileVersionSnapshotAssociation.code_file_version_id
+    ).filter(
+        CodeFileVersion.code_file_id == file_id
+    ).first()
+
+    if snapshot_referenced:
+        return False, "文件有快照引用，请先删除快照！"
+
+    return True, "可以删除"
+
+
 @service_bp.route('/projects/<project_id>/files/<file_id>', methods=['DELETE'])
 @jwt_required()
 def delete_project_file(project_id, file_id):
@@ -109,9 +135,21 @@ def delete_project_file(project_id, file_id):
     if not ProjectMember.query.filter_by(project_id=project_id, user_id=user_id).first():
         return error_response("用户不是项目成员，请联系管理员添加成员！", 403, {})
     code_file = CodeFile.query.filter_by(id=file_id).first()
-    # 如果有快照引用这个文件，不允许删除
-
-    # 如果有review_task引用这个文件，不允许删除
+    if not code_file:
+        return error_response("文件不存在！", 404, {})
+    # 如果有CodeFileVersionSnapshotAssociation或者VersionTaskAssociation引用这个文件，不允许删除
+    deletable, message = check_file_deletable(file_id)
+    if not deletable:
+        return error_response(message, 400, {})
+    # 删除这个文件在项目中的所有关联记录：文件版本快照关联+任务版本关联由于前面检查过了不会有孤儿关联
+    # 因此直接删除所有文件版本+代码文件元数据信息即可
+    db.session.delete(code_file)
+    db.session.commit()
+    return success_response(
+        data={},
+        message="删除文件成功！",
+        status_code=200
+    )
 
 
 @service_bp.route('/projects/<project_id>/versions', methods=['POST'])

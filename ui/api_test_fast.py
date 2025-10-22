@@ -17,7 +17,8 @@ def debug():
         "Content-Type": "application/json"
     }
     # project_manage_test(headers=headers)
-    project_file_test(headers=headers)
+    # project_file_test(headers=headers)
+    project_review_task_manage_test(headers=headers)
 
 
 def project_manage_test(headers):
@@ -317,6 +318,7 @@ def project_file_test(headers):
                     code_file_sizes.append(code_file_info.get("file_size"))
                     code_file_paths.append(code_file_info.get("file_path"))
                     version_ids.append(code_file_info.get("code_file_version_id"))
+                    file_id = code_file_info.get("code_file_id")
                 st.write("以下是此版本快照的随机某个文件版本详情")
                 try:
                     from random import randint
@@ -346,5 +348,55 @@ def project_file_test(headers):
         except Exception as e:
             st.error(f"无法连接到服务器: {str(e)}")
 
+    if st.button("删除某个被快照引用的文件："):
+        try:
+            project_id = 'c7ed4e03-208e-451c-ba2d-f3e752ada169'
+            file_id = 'ada4ecac-4ee7-4ad5-8e7d-fb8f896a2ca2'
+            response = requests.delete(
+                url=f"{BASE_URL}/projects/{project_id}/files/{file_id}",
+                headers=headers
+            )
+            if response.status_code == 200:
+                st.success(response.json().get("message"))
+            else:
+                st.error(f"删除某个被快照引用的文件失败，失败原因：{response.json().get('message')}")
+        except Exception as e:
+            st.error(f"无法连接到服务器: {str(e)}")
+
+    if st.button("删除某个单独的文件"):
+        try:
+            project_id = 'c7ed4e03-208e-451c-ba2d-f3e752ada169'
+            file_id = 'a3abce13-f0a6-423f-84d5-8401c9b33341'    # 需要修改成数据库中孤立的文件id
+            response = requests.delete(
+                url=f"{BASE_URL}/projects/{project_id}/files/{file_id}",
+                headers=headers
+            )
+            if response.status_code == 200:
+                st.success(response.json().get("message"))
+        except Exception as e:
+            st.error(f"无法连接到服务器: {str(e)}")
 
 
+def project_review_task_manage_test(headers):
+    if st.button("创建项目代码审核任务"):
+        try:
+            project_id = 'c7ed4e03-208e-451c-ba2d-f3e752ada169'
+            response = requests.post(
+                url=f"{BASE_URL}/projects/{project_id}/tasks",
+                headers=headers,
+                data=json.dumps({
+                    "task_type": "code_review",
+                    "task_name": "项目代码审核任务",
+                    "task_status": "pending",
+                    "task_description": "项目代码审核任务",
+                    "task_priority": "normal"
+                })
+            )
+            if response.status_code == 200:
+                st.success(response.json().get("message"))
+                st.write(f"任务ID：{response.json().get('data').get('task_id')}")
+            else:
+                st.error(f"创建项目代码审核任务失败，失败原因：{response.json().get('message')}")
+        except Exception as e:
+            st.error(f"无法连接到服务器: {str(e)}")
+    pass

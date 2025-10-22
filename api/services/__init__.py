@@ -8,6 +8,7 @@ bp = Blueprint('service_api', __name__, url_prefix='/api/v1')
 from api.services.code_review_test import *
 from api.services.code_projects.projects_manage_v1 import *
 from api.services.code_projects.code_file_manage_v1 import *
+from api.services.code_review.code_review_manage_v1 import *
 
 
 @bp.route('/tasks/<task_id>', methods=['GET'])

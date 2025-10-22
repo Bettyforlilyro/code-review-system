@@ -32,7 +32,9 @@ class CodeFile(db.Model):
 class CodeFileVersion(db.Model):
     __tablename__ = 'code_file_versions'
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    code_file_id = db.Column(UUID(as_uuid=True), db.ForeignKey('code_files.id'), nullable=False)
+    code_file_id = db.Column(UUID(as_uuid=True),
+                             db.ForeignKey('code_files.id', ondelete='CASCADE'),
+                             nullable=False)
     # 最新的项目快照是哪个版本
     version_number = db.Column(db.Integer, nullable=False, default=1)
     content = db.Column(db.Text, nullable=False)
