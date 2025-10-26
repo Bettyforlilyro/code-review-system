@@ -362,4 +362,3 @@ def get_project_version_snapshot_detail(project_id, snapshot_id):
     )
 
 
-

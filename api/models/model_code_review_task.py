@@ -13,7 +13,6 @@ class CodeFile(db.Model):
     file_path = db.Column(db.String(500), nullable=False)   # 文件全路径
     file_size = db.Column(db.Integer, nullable=False)   # 文件大小，字节为单位
     language_type = db.Column(db.String(20), nullable=False, default='python')
-    # TODO last_modified字段待删除，用版本维护各种修改时间
     last_modified = db.Column(db.TIMESTAMP, default=db.func.now())
     # 关系：一个代码文件CodeFile可能有非常多个版本CodeFileVersion(至少有一个当前最新版本的)
     # 删除CodeFile需要删除所有子CodeFileVersion记录设置cascade=delete即可
@@ -130,7 +129,7 @@ class ReviewTask(db.Model):
     __tablename__ = 'review_tasks'
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = db.Column(UUID(as_uuid=True), db.ForeignKey('projects.id'), nullable=False)
-    review_type = db.Column(db.String(64), nullable=False)  # project/directory/file
+    review_task_scope = db.Column(db.String(64), nullable=False)  # project/directory/file
     created_by = db.Column(UUID(as_uuid=True), db.ForeignKey('users.id'), nullable=False)
     # 任务信息
     task_name = db.Column(db.String(64), nullable=False)
@@ -186,62 +185,194 @@ class VersionTaskAssociation(db.Model):
 
 # 针对单个代码文件版本的审查报告结果模型
 # 由于前面对于多对多关系表采用的中间表VersionTaskAssociation，因此ReviewResult模型与VersionTaskAssociation是一一对应关系即可，不与其他模型耦合
+# 这个表关联两个问题表：跨文件问题表cross_file_issues、单文件问题表single_file_issues，哪一个有效取决于review_task_scope
+# 如果是单文件审查结果，则code_file_version_id代表对应的文件版本，同时使用单文件问题表single_file_issues
+# 如果是整个项目或者文件夹的审查结果，请根据关系定义获取所有的code_file_versions，同时使用跨文件问题表cross_file_issues
 class ReviewResult(db.Model):
     __tablename__ = 'review_results'
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    # 外键到两个主表
+    # 外键
     review_task_id = db.Column(
         UUID(as_uuid=True),
         db.ForeignKey('review_tasks.id', ondelete='cascade'),
         nullable=False
     )
+    review_task_scope = db.Column(db.String(64), nullable=False)    # project/directory/file
+    # 如果是整个项目或者文件夹的任务（即review_task_scope为project/directory），则code_file_version_id为None，
+    # 此时请根据关系定义查找对应的ReviewTask，然后通过关联表VersionTaskAssociation获取所有的code_file_version_id
     code_file_version_id = db.Column(
         UUID(as_uuid=True),
         db.ForeignKey('code_file_versions.id', ondelete='cascade'),
-        nullable=False
+        nullable=True
     )
 
-    # bad_smell/function_bug/security_issue/performance_issue/maintainability_issue
-    issue_type = db.Column(db.String(64), nullable=False)
-    severity = db.Column(db.String(64), nullable=False)     # critical/major/medium/suggestion
-    # 针对单个CodeFile中出现的问题
-    code_file_id = db.Column(UUID(as_uuid=True), db.ForeignKey('code_files.id'), nullable=False)
-    # file_path = db.Column(db.String(500), db.ForeignKey('code_files.file_path'))
-    line_begin = db.Column(db.Integer, nullable=False)      # 问题代码行起止
-    line_end = db.Column(db.Integer, nullable=False)
-    line_number = db.Column(db.Integer, nullable=False)     # 问题代码行数
-    code_snippet = db.Column(db.Text, nullable=False)       # 问题代码片段
-    problem_description = db.Column(db.Text, nullable=False)    # 问题描述
-    solution_suggestion = db.Column(db.Text, nullable=False)    # 给出的修复建议
-    confidence_score = db.Column(db.Float, nullable=False, default=1.0)     # 置信度
-    process_situation = db.Column(db.String(64), nullable=False)    # 问题闭环情况，open/in_progress/closed
-    relevance_to = db.Column(db.String(64), nullable=False)     # manager/architect/developer
-    is_change_related = db.Column(db.Boolean, nullable=False, default=False)    # 是否某次变更引入
-    introduced_version_id = db.Column(UUID(as_uuid=True), db.ForeignKey('code_file_versions.id'), nullable=True)
-    result_metadata = db.Column(db.JSON, nullable=True)
-    created_at = db.Column(db.TIMESTAMP, default=db.func.now())
+    # 统计信息
+    total_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    # 按问题严重程度
+    critical_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    major_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    medium_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    suggestion_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    # 按问题类型
+    functional_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    bad_smell_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    security_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    performance_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    maintainability_issues_count = db.Column(db.Integer, nullable=False, default=0)
+    reliability_issues_count = db.Column(db.Integer, nullable=False, default=0)
+
+    # 结果元数据
+    analysis_time = db.Column(db.Float, nullable=True)      # 分析任务耗时，单位ms
+    result_metadata = db.Column(db.JSON, nullable=True)     # 存储额外的分析数据
+    completed_at = db.Column(db.TIMESTAMP, default=db.func.now())
 
     # 关系
+    # ReviewTask与ReviewResult是一对一关系，ReviewTask是ReviewResult的根源，删除ReviewTask时，会级联删除ReviewResult
     review_task = db.relationship('ReviewTask',
-                                  # 自动创建反向关系，支持从ReviewTask中查询所有关联的ReviewResult
-                                  backref=db.backref('review_results', lazy='dynamic', cascade='delete'))
-    code_file_version = db.relationship('CodeFileVersion', foreign_keys=[code_file_version_id],
-                                        # 自动创建反向关系，支持从CodeFileVersion中查询所有关联的ReviewResult
-                                        backref=db.backref('review_results', lazy='dynamic', cascade='delete'))
+                                  # 在ORM层自动创建反向关系，支持从ReviewTask中查询所有关联的ReviewResult
+                                  backref=db.backref('review_result', uselist=False, cascade='all, delete-orphan'))
+
+    # 辅助方法，获取代码文件元数据
+    @property
+    def code_files(self):
+        if self.review_task_scope == 'file':    # 单个文件只需要返回单条code_file记录
+            return CodeFile.query.filter(
+                CodeFile.id == CodeFileVersion.code_file_id
+            ).filter(
+                CodeFileVersion.id == self.code_file_version_id
+            ).first()
+        else:
+            # 先根据ReviewTask关联的VersionTaskAssociation获取所有的code_file_version_id
+            # 然后根据所有的code_file_version_id查询对应的code_file
+            # 使用数据库JOIN操作一次查询就可以了
+            return CodeFile.query.join(CodeFileVersion, CodeFileVersion.code_file_id == CodeFile.id) \
+                .join(VersionTaskAssociation, VersionTaskAssociation.version_id == CodeFileVersion.id) \
+                .filter(VersionTaskAssociation.review_task_id == self.review_task_id) \
+                .distinct().all()
 
     # 索引和约束
     __table_args__ = (
-        # 根据review_task_id查询，当前预估高频
-        # db.Index('idx_review_result_task_id', 'review_task_id'),  # 复合索引支持前导列匹配，不需要单独创建普通索引
+        # 根据completed_at查询
+        db.Index('idx_review_result_completed_at', 'completed_at'),
+        # 按照任务+分析完成时间查询，建立复合索引，由于复合索引支持前导列匹配，不需要单独为review_task_id创建单独索引
+        db.Index('idx_review_result_task_id_completed_at', 'review_task_id', 'completed_at'),
+        # 按照任务范围查询
+        db.Index('idx_review_result_scope', 'review_task_scope'),
+    )
+
+
+class SingleFileIssue(db.Model):
+    __tablename__ = 'single_file_issues'
+
+    id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    review_result_id = db.Column(UUID(as_uuid=True), db.ForeignKey('review_results.id'), nullable=False)
+    code_file_version_id = db.Column(UUID(as_uuid=True), db.ForeignKey('code_file_versions.id'), nullable=False)
+
+    # 问题基本信息
+    issue_type = db.Column(db.String(64), nullable=False)
+    severity = db.Column(db.String(64), nullable=False)
+    line_begin = db.Column(db.Integer, nullable=True)
+    line_end = db.Column(db.Integer, nullable=True)
+    line_number = db.Column(db.Integer, nullable=True)
+    code_snippet = db.Column(db.Text, nullable=True)
+    problem_description = db.Column(db.Text, nullable=False)
+    solution_suggestion = db.Column(db.Text, nullable=True)
+
+    # 问题评估以及状态跟踪
+    confidence_score = db.Column(db.Float, nullable=False, default=1.0)     # 置信度
+    status = db.Column(db.String(20), nullable=False)       # 问题闭环情况，open/in_progress/closed/won't resolve
+    assigned_to = db.Column(UUID(as_uuid=True), db.ForeignKey('users.id'), nullable=True)   # 处理责任人
+    relevance_to = db.Column(db.String(64), nullable=False)     # manager/architect/developer
+    is_change_related = db.Column(db.Boolean, nullable=True, default=False)
+    introduced_version_id = db.Column(UUID(as_uuid=True), db.ForeignKey('code_file_versions.id'), nullable=True)
+    created_at = db.Column(db.TIMESTAMP, default=db.func.now())
+    resolved_at = db.Column(db.TIMESTAMP, nullable=True)
+
+    # 关系
+    code_file_version = db.relationship('CodeFileVersion', foreign_keys=[code_file_version_id],
+                                        # 在ORM层自动创建反向关系，支持从CodeFileVersion中查询所有关联的SingleFileIssue
+                                        backref=db.backref('single_file_issues', lazy='dynamic', cascade='delete'))
+    introduced_version = db.relationship('CodeFileVersion', foreign_keys=[introduced_version_id])
+
+    # 索引和约束
+    __table_args__ = (
+        # 根据review_result_id查询，当前预估高频
+        db.Index('idx_single_file_issue_result_id', 'review_result_id'),
         # 根据code_file_version_id查询，当前预估高频
-        db.Index('idx_review_result_version_id', 'code_file_version_id'),
-        # 复合查询，当前预估高频
-        db.UniqueConstraint('review_task_id', 'code_file_version_id', name='uq_review_result_task_version'),
-        # 按照问题类型+严重程度查询，当前预估中低频先不创建，后期项目上线后根据查询日志多少再考虑是否新增索引
-        # db.Index('idx_issue_type', 'issue_type', 'severity'),
-        # 按照任务+闭环情况+严重程度查询（用于统计任务闭环情况），当前预估高频，建立复合索引，同时前导列匹配支持按照任务、任务+闭环情况高效查询
-        db.Index('idx_task_process_situation_severity', 'review_task_id', 'process_situation', 'severity'),
-        # 按照问题闭环情况+严重程度查询（用于跨任务计算评估整体项目风险），建立复合索引，当前预估中低频，后期项目上线后根据查询日志多少再考虑是否新增索引
-        # db.Index('idx_severity_process_situation', 'process_situation', 'severity')
+        db.Index('idx_single_file_issue_version_id', 'code_file_version_id'),
+        # 根据status查询
+        db.Index('idx_single_file_issue_status', 'status'),
+        # 根据severity查询
+        db.Index('idx_single_file_issue_severity', 'severity'),
+        # 根据issue_type查询
+        db.Index('idx_single_file_issue_type', 'issue_type'),
+        # 根据confidence_score排序查询
+        db.Index('idx_single_file_issue_confidence_score', 'confidence_score')
+    )
+
+
+class CrossFileIssue(db.Model):
+    __tablename__ = 'cross_file_issues'
+
+    id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    review_result_id = db.Column(UUID(as_uuid=True), db.ForeignKey('review_results.id'), nullable=False)
+
+    # 问题基本信息
+    issue_type = db.Column(db.String(64), nullable=False)   # 问题大类：architecture/design/dependency/performance/security
+    severity = db.Column(db.String(64), nullable=False)
+    category = db.Column(db.String(64), nullable=True)     # 问题小类：circular dependency/god object/long method
+    problem_description = db.Column(db.Text, nullable=False)
+    solution_suggestion = db.Column(db.Text, nullable=False)
+    impact_analysis = db.Column(db.Text, nullable=False)    # 问题影响分析
+
+    # 问题评估以及状态跟踪
+    confidence_score = db.Column(db.Float, nullable=False, default=1.0)
+    status = db.Column(db.String(20), nullable=False)   # 问题闭环情况，open/in_progress/closed/won't resolve
+    assigned_to = db.Column(UUID(as_uuid=True), db.ForeignKey('users.id'), nullable=True)   # 处理责任人
+    relevance_to = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.TIMESTAMP, default=db.func.now())
+    resolved_at = db.Column(db.TIMESTAMP, nullable=True)
+
+    # 关系
+    affected_files = db.relationship('CrossFileIssueAffectedFile', backref='cross_file_issue',
+                                     lazy='dynamic', cascade='delete')
+
+    # 索引
+    __table_args__ = (
+        db.Index('idx_cross_file_issue_result_id', 'review_result_id'),
+        db.Index('idx_cross_file_issue_status', 'status'),
+        db.Index('idx_cross_file_issue_severity', 'severity'),
+        db.Index('idx_cross_file_issue_type_category', 'issue_type', 'category'),
+        db.Index('idx_cross_file_issue_category', 'category'),
+        db.Index('idx_cross_file_issue_confidence_score', 'confidence_score')
+    )
+
+
+class CrossFileIssueAffectedFile(db.Model):
+    __tablename__ = 'cross_file_issue_affected_files'
+
+    cross_file_issue_id = db.Column(
+        UUID(as_uuid=True),
+        db.ForeignKey('cross_file_issues.id', ondelete='cascade'),
+        primary_key=True,
+        nullable=False)
+    code_file_version_id = db.Column(
+        UUID(as_uuid=True),
+        db.ForeignKey('code_file_versions.id', ondelete='cascade'),
+        primary_key=True,
+        nullable=False
+    )
+    issue_metadata = db.Column(db.JSON, nullable=True)      # 这个文件在这个跨文件综合问题中的描述相关信息
+
+    # 关系
+    code_file_version = db.relationship(
+        'CodeFileVersion',
+        foreign_keys=[code_file_version_id],
+        backref=db.backref('cross_file_issue_affected_files', lazy='dynamic', cascade='delete')
+    )
+
+    # 索引
+    __table_args__ = (
+        db.Index('idx_cross_file_issue_affected_file_file_id', 'code_file_version_id'),
     )
